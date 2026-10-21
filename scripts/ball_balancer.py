@@ -16,10 +16,12 @@ import kalman
 # --gui displays the image of what the robot sees
 # --kalman feeds the controller with the error and velocity estimated by the kalman filter instead of the raw measurements from the camera
 # --log saves time, error and control action of every frame to a csv, read by metrics.py
+# --camera d435 reads a RealSense D435 on USB instead of the CSI camera module
 parser = argparse.ArgumentParser()
 parser.add_argument("--gui", action="store_true", help="show the camera window")
 parser.add_argument("--kalman", action="store_true", help="estimate error and velocity with the Kalman filter instead of the finite difference")
 parser.add_argument("--log", action="store_true", help="save time, error and control action of every frame to a csv")
+parser.add_argument("--camera", choices=["picam", "d435"], default="picam", help="CSI camera module (default) or a RealSense D435 on USB")
 mode = parser.add_mutually_exclusive_group(required=True)
 mode.add_argument("--pid", action="store_true", help="PID control")
 mode.add_argument("--lqr", action="store_true", help="LQR control")
@@ -36,7 +38,10 @@ log = []                    # rows of the csv, one per frame with the ball
 
 center = vision.center
 
-picam2 = hardware.start_camera(vision.W, vision.H)
+if args.camera == "d435":
+    picam2 = hardware.start_d435(vision.W, vision.H)
+else:
+    picam2 = hardware.start_camera(vision.W, vision.H)
 
 hardware.home()
 
