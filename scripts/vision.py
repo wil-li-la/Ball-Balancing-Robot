@@ -7,6 +7,8 @@ import numpy as np
 R_BALL_PX = 50.0                         # ball radius in pixels at the nominal height
 AREA_MIN = 0.5 * np.pi * R_BALL_PX**2    # a blob smaller then this cannot be the ball
 FILL_MIN = 0.50                          # the contour detected as the ball should fill at least 50% of its minimum enclosing circle
+HSV_LO = (4, 170, 45)                    # orange ball (the original build used a pink one: (148, 110, 50)..(180, 255, 255))
+HSV_HI = (20, 255, 255)
 
 # IMAGE PROCESSING CONFIGURATION
 W, H = 320, 240             # size of the camera frame
@@ -31,7 +33,7 @@ def find_ball(cnts):
 def detect(frame):
     # IMAGE PROCESSING
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)                # converts to hsv
-    mask = cv2.inRange(hsv, (148, 110, 50), (180, 255, 255))    # keeps only pinkish pixels
+    mask = cv2.inRange(hsv, HSV_LO, HSV_HI)                     # keeps only the ball colour
 
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k_open)       # morphological opening and closing to clean the image
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k_close)
