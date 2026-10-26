@@ -10,9 +10,11 @@ import calibrate
 import camclient
 import vision
 
+cv2.setNumThreads(1)      # one thread per process: three processes each spawning four OpenCV threads starve the camera broker on the Pi 4
+
 # ACTUATION SETUP
 SERVO_PINS = [13, 18, 12]
-OFFSETS = [0, -8, -6]
+OFFSETS = [2, -8, -6]
 Q_HOME = 60                              # motor angle at the nominal pose
 Q_RANGE = 15                             # travel allowed around the nominal pose
 Q_MIN, Q_MAX = Q_HOME - Q_RANGE, Q_HOME + Q_RANGE
@@ -26,12 +28,29 @@ def angle_to_pulse(angle):
     # 0..180 deg -> 500..2500 us
     return 500 + (angle / 180.0) * 2000
 
-def set_angle(angles):
+# SLEW LIMIT: the SG90 follows a step of a few degrees within a frame, so a command that jumps 15 deg between two
+# frames (a derivative term on a noisy measurement) is taken whole and shakes the whole robot. Every call may move each
+# servo by at most SLEW_DEG_PER_S x (time since the last call), so a jump is spread over a few frames and the plate
+# moves at a speed the ball can follow. 150 deg/s = 5 deg per frame at 30 fps: the whole travel in 6 frames
+SLEW_DEG_PER_S = 150.0
+_q_last = None                           # angles last sent, and when
+_t_last = None
+
+def set_angle(angles, slew=True):
+    # angles: the three servo angles wanted, with offsets. Returns the angles actually sent
+    global _q_last, _t_last
+    now = time.monotonic()
+    q = np.array(angles, dtype=float)
+    if slew and _q_last is not None:
+        step = SLEW_DEG_PER_S * min(now - _t_last, 0.1)
+        q = _q_last + np.clip(q - _q_last, -step, step)
     for i in range(3):
-        pi.set_servo_pulsewidth(SERVO_PINS[i], angle_to_pulse(angles[i]))
+        pi.set_servo_pulsewidth(SERVO_PINS[i], angle_to_pulse(q[i]))
+    _q_last, _t_last = q, now
+    return q
 
 def home():
-    set_angle([Q_HOME + OFFSETS[i] for i in range(3)])
+    set_angle([Q_HOME + OFFSETS[i] for i in range(3)], slew=False)
 
 # CAMERA SETUP
 TARGET_FPS = 20                   # frame rate demanded of the sensor
@@ -64,9 +83,10 @@ def lock_exposure(cam):
 # owns the V4L2 device and shares every frame with any number of readers (the control loop and the dashboard at once).
 # The broker must be running: python3 camd.py --camera sonix
 # The controllers were tuned in pixels of a frame where the plate center is the frame center and the scale is
-# vision.PX_PER_MM, so the broker's frame is cropped around the plate center found by calibrate.py (the rim of the
-# plate, 84 mm) and resized until that scale holds. Without calibration.json the whole frame is used, which is only
-# right for a camera that happens to be centered under the plate at the nominal height.
+# vision.PX_PER_MM, so the broker's frame is mapped (shifted to the plate center found by calibrate.py, scaled to that
+# scale, turned to the mechanism's axes) onto the vision frame, which is large enough for the whole plate: what the
+# camera does not see is black. Without calibration.json the whole frame is just resized, which is only right for a
+# camera that happens to be centered under the plate at the nominal height.
 UVC_CAMERAS = ("sonix", "imageplus", "d435", "test")      # test = the synthetic frames of camd.py, to run without a camera
 
 class UvcCamera:
@@ -78,11 +98,16 @@ class UvcCamera:
         cal = calibrate.load()
         if cal is None or cal["camera"] != name:
             print(f"no calibration for {name} (run calibrate.py): using the whole frame")
-            self.crop = None
+            self.crop, self.map = None, None
         else:
-            w = W * cal["px_per_mm"] / vision.PX_PER_MM          # pixels of the broker's frame that cover the vision frame
-            h = H * cal["px_per_mm"] / vision.PX_PER_MM
-            self.crop = (cal["cx"] - w / 2, cal["cy"] - h / 2, w, h)    # (x0, y0, w, h), may leave the frame: padded by replication
+            # the vision frame: the plate center at its center, vision.PX_PER_MM, axes turned to the mechanism's
+            scale = vision.PX_PER_MM / cal["px_per_mm"]
+            rot = cal.get("rot_deg", 0.0)
+            M = cv2.getRotationMatrix2D((cal["cx"], cal["cy"]), rot, scale)   # turns by -rot (OpenCV's angle is counterclockwise with y down)
+            M[:, 2] += (W / 2 - cal["cx"], H / 2 - cal["cy"])
+            self.map = M
+            w, h = 128 * cal["px_per_mm"], 96 * cal["px_per_mm"]             # the 128 x 96 mm the original build saw, for the dashboard
+            self.crop = (cal["cx"] - w / 2, cal["cy"] - h / 2, w, h)
             self.cal = cal
 
     def lock_exposure(self):
@@ -91,10 +116,9 @@ class UvcCamera:
     def capture_array(self):
         self.seq, self.t_capture, frame = self.cam.read()
         self.last_raw = frame
-        if self.crop is not None:
-            x0, y0, w, h = self.crop
-            frame = cv2.getRectSubPix(frame, (int(round(w)), int(round(h))), (x0 + w / 2, y0 + h / 2))
-        return cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA)   # BGR, like RGB888 from picamera2
+        if self.map is None:
+            return cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA)   # BGR, like RGB888 from picamera2
+        return cv2.warpAffine(frame, self.map, self.size, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
 
     def stop(self):
         self.cam.ctl("unlock")             # the camera is left as it was found

@@ -130,7 +130,7 @@ class State:
 
 
 state = State()
-cam_stats = {"fps": 0.0, "age_ms": 0.0, "seq": 0, "exposure": None}
+cam_stats = {"fps": 0.0, "age_ms": 0.0, "seq": 0, "exposure": None, "dropped": None}
 
 
 def draw_overlay(frame, ball, u, label, color):
@@ -158,6 +158,9 @@ def frame_loop(camera):
         if now - t_fps >= 1.0:                 # the broker's rate, from its sequence numbers: this loop runs slower on purpose
             cam_stats["fps"] = round((cam.seq - seq_fps) / (now - t_fps), 1)
             t_fps, seq_fps = now, cam.seq
+            status = cam.cam.ctl("status").split()              # "... seq N dropped M clients K exposure E"
+            cam_stats["dropped"] = int(status[status.index("dropped") + 1])
+            cam_stats["exposure"] = status[status.index("exposure") + 1]
         msg = state.msg if state.running() else None
         if msg is not None and msg.get("t_capture"):      # the age the control loop saw, exposure start to frame read
             cam_stats["age_ms"] = round((msg["t"] - msg["t_capture"]) * 1000, 1)
@@ -175,8 +178,8 @@ def frame_loop(camera):
         else:
             label = "preview (colour)  " + (f"r {preview[2]:.0f} px" if preview else "no ball")
             draw_overlay(frame, preview, None, label, (0, 200, 255))
-        inset = cv2.resize(mask, (80, 60))
-        frame[vision.H - 60:, vision.W - 80:] = cv2.cvtColor(inset, cv2.COLOR_GRAY2BGR)
+        inset = cv2.resize(mask, (88, 88))
+        frame[vision.H - 88:, vision.W - 88:] = cv2.cvtColor(inset, cv2.COLOR_GRAY2BGR)
         ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if ok:
             video.put(jpg.tobytes())
@@ -185,8 +188,13 @@ def frame_loop(camera):
         if k % FULL_EVERY == 0:
             raw = cv2.resize(cam.last_raw, (cam.last_raw.shape[1] // 2, cam.last_raw.shape[0] // 2))
             if cal is not None:
-                cv2.circle(raw, (int(cal["cx"] / 2), int(cal["cy"] / 2)), int(cal["r_px"] / 2), (255, 200, 0), 1)
-                cv2.drawMarker(raw, (int(cal["cx"] / 2), int(cal["cy"] / 2)), (255, 200, 0), cv2.MARKER_CROSS, 8, 1)
+                c = (int(cal["cx"] / 2), int(cal["cy"] / 2))
+                cv2.circle(raw, c, int(cal["r_px"] / 2), (255, 200, 0), 1)
+                rot = np.radians(cal.get("rot_deg", 0.0))              # mechanism +x (red) and +y (green) as seen by the camera
+                for ang, col, name in ((rot, (0, 0, 255), "x"), (rot + np.pi / 2, (0, 255, 0), "y")):
+                    tip = (int(c[0] + 60 * np.cos(ang)), int(c[1] + 60 * np.sin(ang)))
+                    cv2.arrowedLine(raw, c, tip, col, 2, tipLength=0.2)
+                    cv2.putText(raw, name, (tip[0] + 4, tip[1] + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
             if cam.crop is not None:
                 x0, y0, w, h = [int(v / 2) for v in cam.crop]
                 cv2.rectangle(raw, (x0, y0), (x0 + w, y0 + h), (0, 255, 0), 1)

@@ -11,6 +11,11 @@
 # hardware.UvcCamera reads that file and crops the frame around (cx, cy) so that the plate center is the center of
 # the vision frame and the scale is vision.PX_PER_MM, the scale the controllers were tuned at. Run it again whenever
 # the camera moves.
+#
+# "rot_deg" is the angle of the camera about its axis: the direction in the image (x right, y down, degrees) where
+# the mechanism's +x axis (between motors 2 and 3, README section 2) appears. The vision frame is turned back by it, so
+# its axes are the mechanism's and u maps onto the plate as the controllers expect. It is not measured by the rim
+# (a circle has no angle): set it with --rot after placing a marker between motors 2 and 3, or from signtest.py.
 
 import argparse
 import json
@@ -124,8 +129,22 @@ if __name__ == "__main__":
     p.add_argument("--camera", default="sonix")
     p.add_argument("--frames", type=int, default=60)
     p.add_argument("--dry", action="store_true", help="measure, do not write calibration.json")
+    p.add_argument("--rot", type=float, help="camera rotation [deg]: image direction of the mechanism's +x axis (kept from the last calibration if not given)")
+    p.add_argument("--rot-only", action="store_true", help="only store --rot in the existing calibration, do not refit the rim")
     a = p.parse_args()
-    cal = calibrate(a.camera, a.frames)
+    if a.rot_only:
+        cal = load()
+        if cal is None or a.rot is None:
+            raise SystemExit("--rot-only needs an existing calibration.json and --rot")
+    else:
+        cal = calibrate(a.camera, a.frames)
+        previous = load()
+        if a.rot is None and (previous is None or "rot_deg" not in previous):
+            print("WARNING: no camera rotation known, rot_deg = 0: set it with --rot once the mechanism's +x direction is known")
+        cal["rot_deg"] = previous.get("rot_deg", 0.0) if previous else 0.0
+    if a.rot is not None:
+        cal["rot_deg"] = a.rot
+    print(f"camera rotation {cal['rot_deg']} deg (mechanism +x appears at this image angle)")
     if not a.dry:
         with open(PATH, "w") as f:
             json.dump(cal, f, indent=2)

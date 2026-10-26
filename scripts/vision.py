@@ -29,8 +29,8 @@ BG_ALPHA = 0.02                          # rate at which the background follows 
 BG_ALPHA_FG = 0.002                      # rate on foreground that is not the ball, so that a lasting change (a lamp turned on) is absorbed in ~25 s
 
 # IMAGE PROCESSING CONFIGURATION
-W, H = 320, 240             # size of the camera frame
-center = (W // 2, H // 2)
+W, H = 352, 352             # size of the vision frame: at PX_PER_MM it covers the whole plate (inner radius 69 mm) around its center,
+center = (W // 2, H // 2)   # whatever the camera sees; the original build had a 320x240 frame, 128 x 96 mm
 
 # two elliptical kernels
 k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))

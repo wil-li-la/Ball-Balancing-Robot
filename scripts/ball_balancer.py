@@ -125,8 +125,7 @@ try:
                     q_deg = np.clip(q_raw, hardware.Q_MIN, hardware.Q_MAX)
                     q_cmd = [q_deg[i] + hardware.OFFSETS[i] for i in range(3)]
                     if not args.dry:
-                        hardware.set_angle(q_cmd)
-                        q_actual = q_deg
+                        q_actual = hardware.set_angle(q_cmd) - hardware.OFFSETS    # what the servos got, after the slew limit
                     q_sent = q_deg
                     u_prev = u      # only a slope that reached the servos acts on the ball
                     if count % 5 == 0:

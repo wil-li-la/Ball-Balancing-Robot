@@ -15,9 +15,9 @@ start() {
     if running "$1"; then echo "$1 started"; else echo "$1 FAILED:"; tail -5 "../logs/$1.log"; fi
 }
 case "$1" in
-    camd)       start camd --camera "$CAMERA" ;;
+    camd)       start camd --camera "$CAMERA"; sudo renice -n -10 -p $(pgrep -f "python3 -u camd.py") > /dev/null ;;   # the capture must not be starved
     dashboard)  start dashboard --camera "$CAMERA" ;;
-    all)        start camd --camera "$CAMERA"; start dashboard --camera "$CAMERA" ;;
+    all)        "$0" camd; start dashboard --camera "$CAMERA" ;;
     balancer)   shift
                 if running ball_balancer; then pkill -TERM -f "python3 -u [b]all_balancer.py"; sleep 2; fi
                 setsid -f nohup python3 -u ball_balancer.py "$@" > ../logs/balancer.log 2>&1 < /dev/null

@@ -25,6 +25,8 @@ import time
 import cv2
 import numpy as np
 
+cv2.setNumThreads(1)                     # the broker must never wait for a thread pool: late dequeues corrupt frames (see BUFFERSIZE)
+
 DEVICES = {
     "sonix": "/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB2.0_CAM1_USB2.0_CAM1-video-index0",
     "d435": "/dev/v4l/by-id/usb-Intel_R__RealSense_TM__Depth_Camera_435_Intel_R__RealSense_TM__Depth_Camera_435-video-index0",
@@ -68,6 +70,12 @@ class Synthetic:
     def release(self):
         pass
 POWER_LINE = 2                           # v4l2 menu: 0 off, 1 = 50 Hz, 2 = 60 Hz (Taiwan)
+# CORRUPT FRAMES: when the USB link loses packets, uvcvideo (nodrop) still hands over the frame, with everything after
+# the loss shifted: a ball that is not where it is. Such a frame differs from the previous one everywhere, a real
+# change (a hand, the ball) only locally, so a frame whose mean difference from the last good one is above
+# BAD_DIFF is dropped, up to BAD_MAX in a row (then the scene really changed and the next frame is taken)
+BAD_DIFF = 20.0
+BAD_MAX = 10
 MAGIC = b"CAMD"
 HEADER = struct.Struct("<4sIIIQQd")      # magic, width, height, channels, seq, wseq, t_capture [s, CLOCK_MONOTONIC]
 HEADER_SIZE = 64                         # the header is padded so the slots start on a round offset
@@ -86,7 +94,7 @@ def ctl_path(name):
 
 
 class Broker:
-    def __init__(self, name, width, height, fps):
+    def __init__(self, name, width, height, fps, fourcc="MJPG"):
         self.name, self.dev = name, DEVICES[name]
         self.width, self.height, self.fps = width, height, fps
         if self.dev is None:
@@ -95,11 +103,12 @@ class Broker:
             self.cap = cv2.VideoCapture(self.dev, cv2.CAP_V4L2)
             if not self.cap.isOpened():
                 raise RuntimeError(f"cannot open {self.dev}")
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))   # MJPG: a fifth of the USB bandwidth of YUYV, see --fourcc
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
             self.cap.set(cv2.CAP_PROP_FPS, fps)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)       # a spare buffer: with one, a late dequeue leaves the driver nowhere to put
+                                                           # the next frame and uvcvideo hands over a frame with its rows shifted
             self.v4l2("-c", "exposure_dynamic_framerate=0")   # in dim light the auto exposure would otherwise drop the frame rate
             self.v4l2("-c", "auto_exposure=3,white_balance_automatic=1")
             self.v4l2("-c", f"power_line_frequency={POWER_LINE}")   # the lamp behind the plate flickers at the mains frequency
@@ -113,6 +122,8 @@ class Broker:
         os.close(fd)
         self.seq, self.t_capture = 0, 0.0
         self.frame = None                                  # last frame, for the exposure lock
+        self.small = None                                  # last good frame at quarter size, for the corrupt frame check
+        self.dropped, self.dropped_run = 0, 0
         self.lock = threading.Lock()
 
         self.clients = []
@@ -149,7 +160,7 @@ class Broker:
                 elif cmd == "unlock":
                     reply = self.unlock_exposure()
                 elif cmd == "status":
-                    reply = f"{self.name} {self.width}x{self.height} seq {self.seq} clients {len(self.clients)} exposure {self.locked or 'auto'}"
+                    reply = f"{self.name} {self.width}x{self.height} seq {self.seq} dropped {self.dropped} clients {len(self.clients)} exposure {self.locked or 'auto'}"
                 else:
                     reply = f"error unknown command {cmd!r}"
             except Exception as e:
@@ -227,12 +238,19 @@ class Broker:
                 raise RuntimeError(f"{self.name} frame read failed")
             ts = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0     # V4L2 stamps the buffer at start of exposure, CLOCK_MONOTONIC
             t_capture = ts if ts > 0 else time.monotonic()
+            small = frame[::4, ::4].astype(np.int16)
+            if self.small is not None and np.abs(small - self.small).mean() > BAD_DIFF and self.dropped_run < BAD_MAX:
+                self.dropped += 1
+                self.dropped_run += 1
+                continue
+            self.dropped_run = 0
+            self.small = small
             with self.lock:
                 self.frame = frame
             self.publish(frame, t_capture)
             n_report += 1
             if time.monotonic() - t_report >= 10:
-                print(f"camd {self.name}: {n_report / (time.monotonic() - t_report):.1f} fps, {len(self.clients)} clients, exposure {self.locked or 'auto'}", flush=True)
+                print(f"camd {self.name}: {n_report / (time.monotonic() - t_report):.1f} fps, {self.dropped} corrupt frames dropped so far, {len(self.clients)} clients, exposure {self.locked or 'auto'}", flush=True)
                 t_report, n_report = time.monotonic(), 0
 
 
@@ -242,5 +260,8 @@ if __name__ == "__main__":
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=480)
     p.add_argument("--fps", type=int, default=30)
+    p.add_argument("--fourcc", choices=["MJPG", "YUYV"], default="MJPG",
+                   help="MJPG (default) keeps the USB isochronous stream small: on the Pi 4 the 18 MB/s of YUYV 640x480 loses packets "
+                        "whenever other processes load the memory bus, and the frames arrive with their rows shifted")
     a = p.parse_args()
-    Broker(a.camera, a.width, a.height, a.fps).run()
+    Broker(a.camera, a.width, a.height, a.fps, a.fourcc).run()

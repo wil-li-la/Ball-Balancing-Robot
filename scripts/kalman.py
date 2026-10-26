@@ -15,6 +15,13 @@ P0_VEL = 100.0**2                       # (px/s)^2, at reacquisition the velocit
 
 H = np.array([[1.0, 0.0]])              # only the error is actually measured, not its velocity
 
+# INNOVATION GATE: a measurement further than this from the prediction is not the ball moving (the detection jumped to
+# a hand or a reflection, the ball was touched) and is skipped, up to GATE_MAX frames in a row: after that it is taken,
+# the ball really is somewhere else. 40 px at 30 fps is 3 m/s, far above anything a balanced ball does
+GATE_PX = 40.0
+GATE_MAX = 5
+rejected = 0                            # measurements skipped in a row
+
 # KALMAN INITIALIZATION
 # x_hat[i] = [e, e_dot] along axis i. The two axes have the same model and the same noise,
 # and the covariance does not depend on the measurements, so a single P serves both
@@ -24,14 +31,15 @@ P = np.diag([P0_POS, P0_VEL])           # covariance of the estimate
 
 def reset(err):
     # reacquisition: the position is the measurement, the velocity is unknown
-    global x_hat, P
+    global x_hat, P, rejected
     x_hat = np.column_stack([err, np.zeros(2)])
     P = np.diag([P0_POS, P0_VEL])
+    rejected = 0
 
 
 def update(err, u, dt):
     # err is the measured error, u the slope commanded at the previous frame (even if it might be different from the actual slope due to clipping...)
-    global x_hat, P
+    global x_hat, P, rejected
     F = np.array([[1.0, dt],
                   [0.0, 1.0]])
     G = np.array([C*dt**2/2, C*dt])
@@ -44,6 +52,11 @@ def update(err, u, dt):
 
     # update
     y = err - x_pred[:, 0]
+    if np.linalg.norm(y) > GATE_PX and rejected < GATE_MAX:     # not the ball: keep the prediction
+        rejected += 1
+        x_hat, P = x_pred, P_pred
+        return x_hat[:, 0].copy(), x_hat[:, 1].copy()
+    rejected = 0
     S = (H @ P_pred @ H.T)[0, 0] + R_MEAS
     K = P_pred @ H.T[:, 0] / S
     x_hat = x_pred + np.outer(y, K)

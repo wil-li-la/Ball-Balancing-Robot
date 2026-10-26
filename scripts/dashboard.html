@@ -11,8 +11,8 @@
   header b { font-size: 15px; }
   .chip { padding: 2px 8px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
   .chip.ok { border-color: var(--ok); } .chip.warn { border-color: var(--warn); } .chip.bad { border-color: var(--bad); }
-  main { display: grid; grid-template-columns: 640px 1fr; gap: 16px; padding: 16px; }
-  .video img { width: 640px; height: 480px; image-rendering: pixelated; background: #000; display: block; }
+  main { display: grid; grid-template-columns: 528px 1fr; gap: 16px; padding: 16px; }
+  .video img { width: 528px; height: 528px; image-rendering: pixelated; background: #000; display: block; }
   .full img { width: 320px; height: 240px; background: #000; display: block; }
   .side { display: flex; flex-direction: column; gap: 12px; }
   .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -39,11 +39,11 @@
 </header>
 <main>
   <div class="video"><img src="/video.mjpg" alt="vision frame">
-    <div class="note">vision frame 320×240 as the loop sees it · green = loop's detection, orange = colour preview · blue = error, yellow = u ×500 · inset = colour mask</div>
+    <div class="note">vision frame 352×352 (2.5 px/mm, mechanism axes) as the loop sees it · green = loop's detection, orange = colour preview · blue = error, yellow = u ×500 · inset = colour mask</div>
   </div>
   <div class="side">
     <div class="full"><img src="/full.mjpg" alt="full camera view">
-      <div class="note">whole camera frame · yellow = rim fit (plate center), green = crop fed to vision</div>
+      <div class="note">whole camera frame · yellow = rim fit (plate center), red / green = mechanism x / y, green box = 128×96 mm of the original build</div>
     </div>
     <div class="tiles">
       <div class="tile"><div class="k">camera fps</div><div class="v" id="t-fps">–</div></div>
@@ -75,7 +75,7 @@ const es = new EventSource('/events');
 es.onmessage = e => {
   const s = JSON.parse(e.data);
   const cam = s.cam || {};
-  chip($('chip-cam'), `camera ${fmt(cam.fps)} fps · age ${fmt(cam.age_ms, 0)} ms`, cam.fps > 25 ? 'ok' : 'bad');
+  chip($('chip-cam'), `camera ${fmt(cam.fps)} fps · age ${fmt(cam.age_ms, 0)} ms · ${cam.dropped == null ? '' : cam.dropped + ' corrupt frames dropped · '}exposure ${cam.exposure || '…'}`, cam.fps > 25 ? 'ok' : 'bad');
   chip($('chip-loop'), s.running ? `loop running · ${fmt(s.fps_loop)} fps` : 'loop stopped · colour preview', s.running ? 'ok' : 'warn');
   chip($('chip-cal'), s.cal ? `calibration ${s.cal.px_per_mm} px/mm · center (${s.cal.cx}, ${s.cal.cy}) · ${s.cal.time}` : 'no calibration (run calibrate.py)', s.cal ? 'ok' : 'bad');
   recording = !!s.recording;
