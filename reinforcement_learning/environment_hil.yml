@@ -1,0 +1,16 @@
+# Environment of sim_robot.py, which runs scripts/ball_balancer.py on the simulation: it needs OpenCV next to MuJoCo,
+# and OpenCV bundles its own SDL2, which clashes with the one of pygame in the environment of the training.
+# conda env create -f environment_hil.yml
+# conda activate ball-balancer-hil
+name: ball-balancer-hil
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - numpy
+      - mujoco<3.11
+      - gymnasium                    # without the extras: no pygame
+      - imageio                      # imported by the MuJoCo environments of gymnasium
+      - opencv-python-headless

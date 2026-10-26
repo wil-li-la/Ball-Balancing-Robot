@@ -176,7 +176,10 @@ class BallBalancerEnv(MujocoEnv):
         q = kinematics.solve(action * U_MAX, kinematics.H_NOM)
         if q is None:       # unreachable: as on the robot, the servos keep the previous command
             return
-        q = np.clip(q, Q_MIN, Q_MAX)
+        self._command_q(np.clip(q, Q_MIN, Q_MAX))
+
+    def _command_q(self, q):
+        # servo angles in, as the robot sends them (twin.py): each servo moves only past its dead band
         moved = np.abs(q - self._q_target) >= self.params["deadband"]
         self._q_target = np.where(moved, q, self._q_target)
         self._pose_target = forward_kinematics(self._q_target, self._pose_target)
@@ -191,11 +194,14 @@ class BallBalancerEnv(MujocoEnv):
     def _set_plate(self, pose, velocity=True):
         rx, ry = plate_angles(pose)
         qpos = np.array([pose[2] / 1000.0, ry, rx])
+        # the velocity is the change of the imposed pose, not of data.qpos: mj_step has already moved data.qpos by the
+        # previous velocity, and the difference with it gives v_k = dq_k/dt - v_(k-1), a velocity that rings at +-v forever
         if velocity:
-            self.data.qvel[:3] = (qpos - self.data.qpos[:3]) / self.model.opt.timestep
+            self.data.qvel[:3] = (qpos - self._plate_qpos) / self.model.opt.timestep
         else:
             self.data.qvel[:3] = 0.0
         self.data.qpos[:3] = qpos
+        self._plate_qpos = qpos
         self._pose = pose
 
     

@@ -10,6 +10,7 @@ dependencies:
   - pip
   - pip:
       - numpy
+      - scipy                        # system_id.py
       - mujoco<3.11                  # 3.11 dropped the scene argument of mjv_moveCamera, which the Gymnasium viewer still passes
       - gymnasium[classic-control]   # pygame, to render the classic control examples as CartPole.
                                      # no opencv-python: it bundles its own SDL2, which clashes with the one of pygame
