@@ -23,6 +23,8 @@ import stream
 # --stream HOST[:PORT][,HOST[:PORT]...] sends every frame to the dashboard (dashboard.py, the default) and to the digital
 #   twin, reinforcement_learning/twin.py, on the Mac: --stream 127.0.0.1:5006,<mac>
 # --dry runs camera, detection and controller with the servos off, to watch the detection or the twin by moving the ball by hand
+# --latency S with --kalman: the controllers act on the error predicted S seconds ahead with the ball model, to make up for the
+#   delay from the frame to the plate moving (default 0.08 s, 0 disables)
 parser = argparse.ArgumentParser()
 parser.add_argument("--gui", action="store_true", help="show the camera window")
 parser.add_argument("--kalman", action="store_true", help="estimate error and velocity with the Kalman filter instead of the finite difference")
@@ -31,17 +33,22 @@ parser.add_argument("--camera", choices=["picam", *hardware.UVC_CAMERAS], defaul
 parser.add_argument("--detect", choices=["background", "color"], default="background", help="how the ball is told from the rest of the frame")
 parser.add_argument("--stream", metavar="HOST[:PORT][,...]", default="127.0.0.1:5006", help="send every frame to these viewers (default: the dashboard on the Pi; add ,<mac> for the twin)")
 parser.add_argument("--dry", action="store_true", help="leave the servos off")
+parser.add_argument("--latency", type=float, default=0.08, help="with --kalman: control the error predicted this many seconds ahead (0 disables)")
+parser.add_argument("--gain", type=float, default=1.0, help="multiplies the PID gains KP, KI, KD of control.py (this build's servos have a dead band the original gains barely cross)")
 mode = parser.add_mutually_exclusive_group(required=True)
 mode.add_argument("--pid", action="store_true", help="PID control")
 mode.add_argument("--lqr", action="store_true", help="LQR control")
 mode.add_argument("--rl", action="store_true", help="RL control")
 args = parser.parse_args()
 gui_on = args.gui
+control.KP, control.KI, control.KD = control.KP * args.gain, control.KI * args.gain, control.KD * args.gain
 
 # SIGTERM (kill, start.sh stop) is treated like ctrl+c, so the servos are released on the way out
 signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))
 
 fps_smooth = float(hardware.TARGET_FPS)    # variable to keep track of the fps
+LOST_HOME_S = 0.3           # without the ball for this long the plate goes back to level: it is being put back by hand, and
+t_lost = None               # a plate left tilted would throw it off again
 
 t_prev = time.monotonic()   # instant of actuation
 had_ball = False            # flag to know wether the previous frame had the ball
@@ -104,6 +111,8 @@ try:
             # ERROR AND ERROR DERIVATIVE ESTIMATION
             if args.kalman:
                 err_ctrl, err_der = kalman.update(err, u_prev, dt)
+                if args.latency > 0:
+                    err_ctrl, err_der = kalman.predict(err_ctrl, err_der, u_prev, args.latency)
             else:
                 err_ctrl, err_der = err, None      # the controllers take the finite difference themselves
 
@@ -135,7 +144,13 @@ try:
             except (ValueError, ZeroDivisionError, FloatingPointError):
                 print("IK error, skipping")
         else:
+            if had_ball:
+                t_lost = time.monotonic()
             had_ball = False
+            if t_lost is not None and time.monotonic() - t_lost > LOST_HOME_S:
+                if not args.dry:
+                    hardware.set_angle([hardware.Q_HOME + hardware.OFFSETS[i] for i in range(3)])   # through the slew limit
+                u_prev = np.zeros(2)
 
         if link is not None:
             link.send(t_frame, ball, u_prev if q_sent is not None else None, q_sent, q_actual, getattr(picam2, "t_capture", None))

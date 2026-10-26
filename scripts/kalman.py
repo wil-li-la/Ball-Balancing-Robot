@@ -63,3 +63,12 @@ def update(err, u, dt):
     P = (np.eye(2) - np.outer(K, H[0])) @ P_pred
 
     return x_hat[:, 0].copy(), x_hat[:, 1].copy()     # filtered error, its velocity
+
+
+def predict(err, vel, u, horizon):
+    # where the ball will be `horizon` seconds after the frame, under the slope u that is acting on it: the loop acts on
+    # what the camera saw 60 to 100 ms ago (exposure, transfer, detection, servo pulse period, servo response), and a
+    # ping pong ball crosses 2 to 3 cm in that time. The controllers are given this instead of the measured error,
+    # so they command the plate for where the ball will be when the command takes effect
+    acc = C * np.asarray(u, dtype=float)
+    return err + vel * horizon + 0.5 * acc * horizon**2, vel + acc * horizon

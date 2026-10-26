@@ -14,7 +14,7 @@ import numpy as np
 R_BALL_PX = 50.0                         # ball radius in pixels at the nominal height
 PX_PER_MM = R_BALL_PX / 20.0             # the scale of the frame the controllers were tuned at: a ping pong ball is 20 mm in radius
 AREA_MIN = 0.5 * np.pi * R_BALL_PX**2    # a blob smaller then this cannot be the ball
-R_MAX = 1.6 * R_BALL_PX                  # nor a blob whose enclosing circle is much larger than the ball (a hand, a shadow)
+R_MAX = 1.3 * R_BALL_PX                  # nor a blob whose enclosing circle is much larger than the ball (a hand, a shirt)
 FILL_MIN = 0.50                          # the contour detected as the ball should fill at least 50% of its minimum enclosing circle
 HSV_LO = (4, 170, 45)                    # orange ball (the original build used a pink one: (148, 110, 50)..(180, 255, 255))
 HSV_HI = (20, 255, 255)
@@ -31,6 +31,10 @@ BG_ALPHA_FG = 0.002                      # rate on foreground that is not the ba
 # IMAGE PROCESSING CONFIGURATION
 W, H = 352, 352             # size of the vision frame: at PX_PER_MM it covers the whole plate (inner radius 69 mm) around its center,
 center = (W // 2, H // 2)   # whatever the camera sees; the original build had a 320x240 frame, 128 x 96 mm
+PLATE_R_MM = 66.0           # only this far from the center is the plate: a ball cannot be further out, and beyond it the frame shows
+                            # the ring, hands, clothes and the room, which the colour mask would otherwise pick up
+plate_mask = np.zeros((H, W), np.uint8)
+cv2.circle(plate_mask, center, int(PLATE_R_MM * PX_PER_MM), 255, -1)
 
 # two elliptical kernels
 k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
@@ -102,6 +106,7 @@ def detect(frame, method="background"):
     else:
         mask = mask_color(frame)
 
+    mask &= plate_mask                                          # nothing outside the plate is the ball
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k_open)       # morphological opening and closing to clean the image
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k_close)
 

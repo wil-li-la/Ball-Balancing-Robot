@@ -30,7 +30,7 @@ if not pi.connected:
 # OFFSETS of the low sides), and with the controllers' angles sent as they were the plate tilted towards the ball instead
 # of away from it. Each servo is therefore driven mirrored about its own home pulse, so the home pose and the OFFSETS
 # stay as leveled and only the direction of every change flips. Set SERVO_DIR = 1 for a build like the original.
-SERVO_DIR = -1
+SERVO_DIR = 1
 
 def angle_to_pulse(angle):
     # 0..180 deg -> 500..2500 us
