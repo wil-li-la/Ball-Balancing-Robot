@@ -34,3 +34,7 @@ reinforcement_learning/policy.npz
 reinforcement_learning/policy_v1_as10.npz
 reinforcement_learning/policy_v2_as20.npz
 reinforcement_learning/sac_ball.zip
+# per-camera calibration, run logs
+scripts/calibration.json
+scripts/runs/
+logs/

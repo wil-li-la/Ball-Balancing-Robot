@@ -4,12 +4,14 @@ import cv2
 import numpy as np
 import time
 import argparse
+import signal
 
 import hardware
 import vision
 import control
 import kinematics
 import kalman
+import stream
 
 # CONTROL MODE AND GUI ON/OFF
 # exactly one control mode must be given: --pid, --lqr or --rl
@@ -17,17 +19,27 @@ import kalman
 # --kalman feeds the controller with the error and velocity estimated by the kalman filter instead of the raw measurements from the camera
 # --log saves time, error and control action of every frame to a csv, read by metrics.py
 # --camera d435|sonix reads a USB camera (RealSense D435 colour stream, Sonix webcam) instead of the CSI camera module
+# --detect background (default) finds the ball as what differs from the empty plate, whatever its color; color uses the HSV range of vision.py
+# --stream HOST[:PORT][,HOST[:PORT]...] sends every frame to the dashboard (dashboard.py, the default) and to the digital
+#   twin, reinforcement_learning/twin.py, on the Mac: --stream 127.0.0.1:5006,<mac>
+# --dry runs camera, detection and controller with the servos off, to watch the detection or the twin by moving the ball by hand
 parser = argparse.ArgumentParser()
 parser.add_argument("--gui", action="store_true", help="show the camera window")
 parser.add_argument("--kalman", action="store_true", help="estimate error and velocity with the Kalman filter instead of the finite difference")
 parser.add_argument("--log", action="store_true", help="save time, error and control action of every frame to a csv")
 parser.add_argument("--camera", choices=["picam", *hardware.UVC_CAMERAS], default="picam", help="CSI camera module (default) or a USB camera")
+parser.add_argument("--detect", choices=["background", "color"], default="background", help="how the ball is told from the rest of the frame")
+parser.add_argument("--stream", metavar="HOST[:PORT][,...]", default="127.0.0.1:5006", help="send every frame to these viewers (default: the dashboard on the Pi; add ,<mac> for the twin)")
+parser.add_argument("--dry", action="store_true", help="leave the servos off")
 mode = parser.add_mutually_exclusive_group(required=True)
 mode.add_argument("--pid", action="store_true", help="PID control")
 mode.add_argument("--lqr", action="store_true", help="LQR control")
 mode.add_argument("--rl", action="store_true", help="RL control")
 args = parser.parse_args()
 gui_on = args.gui
+
+# SIGTERM (kill, start.sh stop) is treated like ctrl+c, so the servos are released on the way out
+signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))
 
 fps_smooth = float(hardware.TARGET_FPS)    # variable to keep track of the fps
 
@@ -43,15 +55,29 @@ if args.camera in hardware.UVC_CAMERAS:
 else:
     picam2 = hardware.start_camera(vision.W, vision.H)
 
-hardware.home()
+if not args.dry:
+    hardware.home()
+
+# BACKGROUND CALIBRATION: the plate must be empty, and level, as it is when the servos are at home
+if args.detect == "background":
+    print("Calibrating the background, keep the plate empty...")
+    time.sleep(0.5)                                         # the plate settles at home
+    print(hardware.lock_exposure(picam2))
+    noise = vision.calibrate([picam2.capture_array() for _ in range(vision.BG_FRAMES)])
+    print(f"Background ready (pixel noise {noise:.1f}), place the ball")
+
+link = stream.Stream(args.stream, vision.W, vision.H, getattr(picam2, "cal", None), vision.PX_PER_MM) if args.stream else None
 
 try:
     count = 0       # holds the number of frames
     while True:
         count = count + 1
         frame = picam2.capture_array()
+        t_frame = time.monotonic()
+        q_sent = None       # servo angles commanded at this frame, for the twin
+        q_actual = None     # the angles the servos were really sent, after the limits of hardware.set_angle
 
-        ball, mask = vision.detect(frame)
+        ball, mask = vision.detect(frame, args.detect)
 
         if ball is not None:
 
@@ -98,7 +124,10 @@ try:
                 if q_raw is not None:
                     q_deg = np.clip(q_raw, hardware.Q_MIN, hardware.Q_MAX)
                     q_cmd = [q_deg[i] + hardware.OFFSETS[i] for i in range(3)]
-                    hardware.set_angle(q_cmd)
+                    if not args.dry:
+                        hardware.set_angle(q_cmd)
+                        q_actual = q_deg
+                    q_sent = q_deg
                     u_prev = u      # only a slope that reached the servos acts on the ball
                     if count % 5 == 0:
                         print(f"\rfps: {fps_smooth:5.1f} | err: [{err[0]:6.1f} {err[1]:6.1f}] | u: [{u[0]:+.3f} {u[1]:+.3f}] | q: [{q_cmd[0]:5.1f} {q_cmd[1]:5.1f} {q_cmd[2]:5.1f}]", end="", flush=True)
@@ -108,6 +137,9 @@ try:
                 print("IK error, skipping")
         else:
             had_ball = False
+
+        if link is not None:
+            link.send(t_frame, ball, u_prev if q_sent is not None else None, q_sent, q_actual, getattr(picam2, "t_capture", None))
 
         # DISPLAY FRAME
         if gui_on:
