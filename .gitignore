@@ -39,3 +39,6 @@ scripts/calibration.json
 scripts/runs/
 logs/
 !scripts/runs/run_20261026_165651.jsonl
+
+# runs recorded by the digital twin
+reinforcement_learning/twin_logs/

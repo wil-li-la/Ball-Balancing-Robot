@@ -63,7 +63,7 @@ This README is organized in the following sections:
 The code runs on the Raspberry Pi of §3, with Raspberry Pi OS. The dependencies are installed with `apt`, and the `pigpio` daemon must be started before the script.
 
 ```bash
-sudo apt install git python3-picamera2 python3-opencv python3-numpy pigpio python3-pigpio
+sudo apt install git python3-picamera2 python3-opencv python3-numpy pigpio python3-pigpio v4l-utils
 git clone https://github.com/UmberThor/Ball-Balancing-Robot.git
 cd Ball-Balancing-Robot/scripts
 sudo pigpiod
@@ -83,6 +83,16 @@ The `--gui` flag is optional and opens a window that shows the ball detection of
 The `--kalman` flag is optional and feeds the controller with the error and the velocity estimated by the Kalman filter of §9 instead of the measured error and its finite difference. 
 
 The `--log` flag is optional and, when the script stops, saves to `log_<mode>_<date>_<time>.csv` the time, the measured error and the control action of every frame with the ball. 
+
+The `--camera` flag is optional and reads one of the USB cameras of `UVC_CAMERAS` in `scripts/hardware.py` instead of the camera module, through the camera broker of §16.3, which must be running.
+
+The `--detect background|color` flag chooses the ball detection of §7. With the default, `background`, the plate must be empty from the start until the script prints that the background is ready, a few seconds.
+
+The `--stream HOST[:PORT][,...]` flag sends every frame to the viewers listed, by default the dashboard of §16.3 on the Raspberry Pi, `127.0.0.1:5006`. Adding `,<computer>` also feeds the digital twin of §12.4 running on that computer, port 5005 by default.
+
+The `--dry` flag is optional and runs the camera, the detection and the controller with the servos off, to check the detection or the twin by moving the ball by hand.
+
+The `--latency`, `--gain`, `--kd` and `--ki` flags tune the PID and its Kalman prediction for this build, §16.3.
 
 The script is stopped with Ctrl+C, or with `q` on the window when `--gui` is set.
 
@@ -399,9 +409,16 @@ The three servos are driven by `pigpio`, which times the pulses with DMA, indepe
 
 ## 7. Ball detection
 
-The ball is detected by color in `scripts/vision.py`, on frames of 320 by 240 pixels. The camera runs at 20 Hz, which sets the rate of the loop. The camera is centered under the plate, with the axes of the image parallel to the axes $x$ and $y$ of §2, so the center of the frame is the center of the plate.
+The ball is detected in `scripts/vision.py`, on frames of 320 by 240 pixels. The camera runs at 20 Hz, which sets the rate of the loop. The camera is centered under the plate, with the axes of the image parallel to the axes $x$ and $y$ of §2, so the center of the frame is the center of the plate.
 
-Each frame is converted to HSV and thresholded with hue from 148 to 180, saturation of at least 110 and value of at least 50. A ball of a different color requires a different range. The mask is cleaned with a morphological opening and closing, and its largest contour is accepted as the ball if its area is large enough and it fills more than 50% of its minimum enclosing circle. The center and the radius of that circle are the output of the detection. The position error $\mathbf{e}$, input of the controller, is the vector from the ball to the center of the frame, in pixels.
+The first step marks the pixels that may belong to the ball, in one of two ways chosen with `--detect`:
+
+- **background**, the default. The camera is fixed to the base and looks up through the transparent plate, so what it sees behind the plate, the ceiling, does not move when the plate tilts. At the start, with the plate empty and level, the exposure and the white balance of the camera are locked and 30 frames are taken; their median, in the Lab color space, is the background, and their spread gives each pixel its own threshold, at least 12 Lab units or four standard deviations of its noise, plus the change a shift of one pixel would cause there, since the servos shake the base and the camera with it. The ball is what differs from the background by more than that, whatever its color: seen from below it is backlit, a dark disc against the ceiling. While the robot runs, the background follows slow changes of the light wherever nothing is detected, but never where the ball is.
+- **color**. Each frame is converted to HSV and thresholded with the range `HSV_LO`, `HSV_HI` of `vision.py`, hue from 4 to 20, saturation of at least 170 and value of at least 45 for the orange ball. A ball of a different color requires a different range.
+
+The mask is cleaned with a morphological opening and closing. Its contours are tried from the largest, and the first one whose area is large enough, whose minimum enclosing circle is not much larger than the ball, and which fills more than 50% of that circle is accepted as the ball: a hand reaching into the frame is larger, but it does not stop the ball from being found. The center and the radius of that circle are the output of the detection. The position error $\mathbf{e}$, input of the controller, is the vector from the ball to the center of the frame, in pixels.
+
+On the frames of the simulated camera of §12.4, with the light coming from above, the background detection finds a pink, orange, blue, green, white, black ball and one of the same gray as the ceiling, each in 40 positions out of 40 over random slopes of the plate, with a median error of the center of 1 px; the color detection, tuned for the orange ball, finds only the orange one.
 
 <p align="center">
   <img src="docs/vision.gif" alt="The masked frame shown by the --gui window" width="640">
@@ -525,7 +542,7 @@ What the policy commands is the quantity of the robot. The action is the slope o
 
 The action then goes through the same chain as the output of the PID: §6 turns it into a pose and §5, with the same `kinematics.py` that runs on the robot, into a configuration, which is clipped to the travel. Between the command and the plate the simulation reproduces what the servos add: a first order lag with a rate limit, and a dead band, below which the servo ignores a command, that also stands for the backlash of its gears. The dead band is what makes the ball oscillate around the center instead of settling on it.
 
-The configuration reached by the servos is then turned back into the pose of the plate, at which the plate is driven through its three joints. This forward kinematics is solved with a quasi-Newton method. The Jacobian $J$ of the inverse kinematics, from the pose $(u_x,\ u_y,\ h)$ to the configuration $(q_1,\ q_2,\ q_3)$, is precomputed around the nominal pose: it tells how much the configuration changes in response to a small change of the pose. Its inverse $J^{-1}$ tells how much the pose changes in response to a small change of the configuration, and corrects the pose at each iteration by $J^{-1}$ times the difference between the configuration of the servos and the one §5 gives for the current pose. It is Newton's method applied to the forward kinematics, with the Jacobian fixed at the nominal pose.
+The configuration reached by the servos is then turned back into the pose of the plate, at which the plate is driven through its three joints, with the velocity of the change of the imposed pose from one physics step to the next. This forward kinematics is solved with a quasi-Newton method. The Jacobian $J$ of the inverse kinematics, from the pose $(u_x,\ u_y,\ h)$ to the configuration $(q_1,\ q_2,\ q_3)$, is precomputed around the nominal pose: it tells how much the configuration changes in response to a small change of the pose. Its inverse $J^{-1}$ tells how much the pose changes in response to a small change of the configuration, and corrects the pose at each iteration by $J^{-1}$ times the difference between the configuration of the servos and the one §5 gives for the current pose. It is Newton's method applied to the forward kinematics, with the Jacobian fixed at the nominal pose.
 
 The latency of the loop, the time constant of the servos, the noise of the detection and the scale of the camera are drawn at every reset, so that the policy is trained on a family of robots rather than on one:
 
@@ -567,6 +584,44 @@ The policy is trained for 100 000 steps with SAC, from `stable-baselines3`, in `
 
 Only the actor is deployed. Its weights are exported to `scripts/policy.npz`, and `control.rl` evaluates the network, 18 → 256 → 256 → 2, in NumPy, so the Raspberry Pi does not need PyTorch. The function keeps the history of errors and actions that the observation needs, and it is reset with the rest of the control when the ball is reacquired.
 
+The policy in `scripts/policy.npz` was trained before a fix of the simulation: the velocity of the plate joints was the difference between the new pose and `data.qpos`, which `mj_step` had already moved by the previous velocity. That gives $v_k = \Delta q_k / \Delta t - v_{k-1}$, a velocity that rings at $\pm v$ forever, about 1 rad/s with the servos at rest and 10 rad/s at the median under random actions, against the 5 rad/s the servos can give the plate. On the policy it makes no difference: over 20 episodes it keeps the ball for the whole 20 s in both simulations, 19.9 px from the center on average, so the error does not explain the gap of §13. It mattered where the simulated ball is put down on a moving plate, as the twin of §12.4 does, where the ringing plate could throw it off.
+
+### 12.4 Digital twin and system identification
+
+The simulation of §12.1 can follow the robot while it runs. `ball_balancer.py` sends every frame, one UDP datagram of JSON from `scripts/stream.py`, with the time the frame was read, the ball it found, the servo angles it commanded and the ones the slew limit of `scripts/servo.py` let through; `--stream 127.0.0.1:5006,<computer>` sends it to the dashboard and to the computer. On the computer, in the folder `reinforcement_learning`, in the environment of §12:
+
+```bash
+mjpython twin.py                               # listen on UDP 5005 and show the twin; the run is saved to twin_logs/
+mjpython twin.py --replay ../scripts/runs/run_20261026_165651.jsonl   # replay a run, or a --log csv of §1
+python system_id.py ../scripts/runs/run_20261026_165651.jsonl         # the parameters that predict the run best
+mjpython twin.py --params fitted.json          # the twin with those parameters
+```
+
+`mjpython`, which comes with MuJoCo, is needed on macOS for the viewer. In the viewer the plate moves as the servos were commanded, through the servo model of §12.1, and the arms, which the simulation leaves out, are drawn back by `arms.py` from the angles of the simulated servos and the pose of the plate. The green ghost is where the camera sees the ball, and the solid ball is the shadow of `shadow.py`: a simulated ball that rolls on its own under the same commands, and that every half second is put back on the ghost, with the position and velocity of a line through the last 6 measurements, after the acceleration that the slope of the plate gives the ball is taken out of them. The ball is unstable, so an open loop simulation drifts away in about a second whatever its parameters; how far the shadow drifts within half a second of being put back measures how well the simulation predicts the robot.
+
+`system_id.py` replays a run with the shadow and searches, with Nelder-Mead, the parameters that make that drift smallest: the latency, the time constant and the dead band of the servos of §12.1, the scale of the frame at the center of the ball, the rolling friction, and `bias_x`, `bias_y`, the slope of the real plate when the servos are sent to level, since the offsets of §4.2 are set by eye. The plate center comes from the `cal` of the stream when there is one; the scale is fitted, because the calibration of §16.2 measures the ring, and the center of the ball is 24 mm farther from the camera. `system_id.ipynb` runs it on the run of §16.4 and plots the result.
+
+`sim_robot.py` checks the whole chain without the robot. It runs `scripts/ball_balancer.py` unchanged, with `hardware.py` replaced by the simulation: the camera renders the simulated camera looking up at a tiled ceiling, with the parameters of the robot drawn at random and saved, and `--push` flicks the ball every few seconds as a hand would. The frame is rendered at the size the loop asks for, at 2.5 px/mm at the center of the ball, and the angles go through `servo.slew` as on the robot. `--scripts` runs another copy of `scripts/`. It needs OpenCV next to MuJoCo, which the environment of the training does not have, so it runs in its own (`conda env create -f environment_hil.yml`):
+
+```bash
+python sim_robot.py --ball-color 0.15,0.3,0.9 --push 3 -- --pid --stream 127.0.0.1
+```
+
+On a run of 60 s of the PID with a push every 2 s, the shadow drifts by 17 px on average with the nominal parameters, by 11 px with the true ones, the rest being the pushes it cannot know about, and by 10 px with the fitted ones, which recover the latency (85 ms against 89 ms) and the dead band (2.30° against 2.31°); the time constant of the servos is found less well (52 ms against 33 ms), since a longer lag and a shorter latency look alike on a smooth run. On the 72 s run of this build, §16.4, the drift goes from 53 px with the nominal parameters to 10 px with the fitted ones, and parameters fitted on the first half of the run bring the second half from 55 px to 12 px. What the fit finds:
+
+| Parameter | Nominal | Fitted | |
+|---|---|---|---|
+| `bias_y` | 0 | −0.053 (−3.0°) | the plate at home is off level: `level.py` measured 2.9°, and the PID held a mean slope of +0.05 to make up for it (§16.4) |
+| `bias_x` | 0 | −0.002 (−0.1°) | |
+| rolling friction | 1e-4 | 4.8e-4 | the real ball rolls less freely than the simulated one |
+| dead band | 2.0° | 1.8° | |
+| latency + servo time constant | 60 + 25 ms | 16 + 61 ms | only the sum, 77 ms, is determined: on a smooth run a later command and a slower servo look alike, as on the simulated robot above |
+| scale at the center of the ball | 2500 px/m | 2327 px/m | see below |
+
+The scale is not settled. The radius of the ball in that run, 37.8 px for a radius of 20 mm, gives 1.89 px/mm at its center, against 2.33 for the fit; but the run used `--detect color`, whose threshold may cut the dark edge of the backlit ball and shrink its radius. The direct measurement is the ball held against the inner edge of the ring, its center 69.07 − 20 = 49.1 mm from the center of the plate, at a few angles. The scale matters to every gain tuned in pixels: the original build took it from the radius of the ball, at its center, as `kalman.PX_PER_M` and the `ERR_SCALE` of the policy (160 px) still assume, so `control.ERR_SCALE` must stay 160 whatever the size of the frame.
+
+On the log of the PID of §13, taken with the D435 before this build, the fit gives a latency of 95 ms, a dead band of 2.5° and a rolling friction 16 times the one of `ball_balancer.xml`, with `bias_y` stuck at the bound of ±0.03 it had then. That log cannot tell the sense of the servos from the orientation of the camera (servos turned the other way and the image turned by 180° predict it equally well), so the sign of its biases means nothing.
+
 ## 13. Evaluation metrics
 
 The three controllers are compared on the robot, on a run of 60 s each. Running `ball_balancer.py` with `--log` writes a csv with the time, the error and the control action of every frame in which the ball is seen, and `metrics/metrics.py` reduces one or more of those files to four numbers.
@@ -601,9 +656,9 @@ In simulation the same RL policy never loses the ball and holds it at the center
 
 **Control**
 
-- A model of the lag introduced by the servos and by the processing of the frame, identified from logged data, in the Kalman filter of §9 and in the LQR of §11.
+- The lag of the servos and of the processing of the frame, identified with §12.4, in the Kalman filter of §9 and in the LQR of §11.
 - A calibration of the camera for the scale from pixels to meters, now taken from the radius of the ball.
-- A more realistic simulation, which would improve the performance of the RL policy on the robot, followed by a phase of fine tuning on the robot itself.
+- A more realistic simulation, which would improve the performance of the RL policy on the robot, followed by a phase of fine tuning on the robot itself: the ranges of the parameters of §12.1 centered on the values §12.4 finds on the robot, with the rolling friction among them.
 
 **New tasks**
 
