@@ -14,7 +14,8 @@ class Stream:
         self.addrs = []
         for t in target.split(","):
             host, _, port = t.strip().partition(":")
-            self.addrs.append((host, int(port) if port else PORT))
+            ip = socket.getaddrinfo(host, None, socket.AF_INET)[0][4][0]     # resolved once: a lookup per frame would stall the loop
+            self.addrs.append((ip, int(port) if port else PORT))
         # cal: hardware.UvcCamera.cal, the plate center and scale in the BROKER's frame. The vision frame is cropped and
         # resized from it so that the plate center is its center and the scale is vision.PX_PER_MM, by construction;
         # "cal" says so in the frame "ball" and "size" are in, "cal_broker" keeps the measured values

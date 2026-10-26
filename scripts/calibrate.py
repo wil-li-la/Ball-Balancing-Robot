@@ -89,11 +89,18 @@ def fit_rim(frame):
     return cx, cy, r_in, r_out, n_in, n_out
 
 
-def load():
-    if not os.path.exists(PATH):
-        return None
-    with open(PATH) as f:
-        return json.load(f)
+def load(camera=None):
+    # the live calibration (calibration.json, not in git), or, for a camera it is not about, the snapshot committed for that
+    # camera (calibration.<camera>.json), so that a fresh clone starts from the last known values
+    for path in (PATH, os.path.join(HERE, f"calibration.{camera}.json") if camera else None):
+        if path and os.path.exists(path):
+            with open(path) as f:
+                cal = json.load(f)
+            if camera is None or cal.get("camera") == camera:
+                if path != PATH:
+                    print(f"using the committed snapshot {os.path.basename(path)}: run calibrate.py after mounting the camera")
+                return cal
+    return None
 
 
 def calibrate(camera, frames):

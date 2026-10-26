@@ -65,20 +65,20 @@ if args.camera in hardware.UVC_CAMERAS:
 else:
     picam2 = hardware.start_camera(vision.W, vision.H)
 
-if not args.dry:
-    hardware.home()
-
-# BACKGROUND CALIBRATION: the plate must be empty, and level, as it is when the servos are at home
-if args.detect == "background":
-    print("Calibrating the background, keep the plate empty...")
-    time.sleep(0.5)                                         # the plate settles at home
-    print(hardware.lock_exposure(picam2))
-    noise = vision.calibrate([picam2.capture_array() for _ in range(vision.BG_FRAMES)])
-    print(f"Background ready (pixel noise {noise:.1f}), place the ball")
-
 link = stream.Stream(args.stream, vision.W, vision.H, getattr(picam2, "cal", None), vision.PX_PER_MM) if args.stream else None
 
-try:
+try:                # from the first servo pulse on, every exit (ctrl+c, SIGTERM, an error) goes through shut_down
+    if not args.dry:
+        hardware.home()
+
+    # BACKGROUND CALIBRATION: the plate must be empty, and level, as it is when the servos are at home
+    if args.detect == "background":
+        print("Calibrating the background, keep the plate empty...")
+        time.sleep(0.5)                                         # the plate settles at home
+        print(hardware.lock_exposure(picam2))
+        noise = vision.calibrate([picam2.capture_array() for _ in range(vision.BG_FRAMES)])
+        print(f"Background ready (pixel noise {noise:.1f}), place the ball")
+
     count = 0       # holds the number of frames
     while True:
         count = count + 1
@@ -157,8 +157,9 @@ try:
                 t_lost = time.monotonic()
             had_ball = False
             if t_lost is not None and time.monotonic() - t_lost > LOST_HOME_S:
+                q_sent = np.full(3, float(hardware.Q_HOME))
                 if not args.dry:
-                    hardware.set_angle([hardware.Q_HOME + hardware.OFFSETS[i] for i in range(3)])   # through the slew limit
+                    q_actual = hardware.set_angle([hardware.Q_HOME + hardware.OFFSETS[i] for i in range(3)]) - hardware.OFFSETS   # through the slew limit
                 u_prev = np.zeros(2)
 
         if link is not None:

@@ -146,6 +146,15 @@ def draw_overlay(frame, ball, u, label, color):
     cv2.putText(frame, label, (4, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
 
 
+def guarded(fn, *args):
+    # a thread of the dashboard that dies must take the page down with it, not leave a frozen image under green chips
+    try:
+        fn(*args)
+    except Exception as e:
+        print(f"dashboard: {fn.__name__} failed: {e!r}; exiting so that start.sh can restart it", flush=True)
+        os._exit(1)
+
+
 def frame_loop(camera):
     cam = hardware.UvcCamera(camera, vision.W, vision.H)
     cal = calibrate.load()
@@ -168,8 +177,8 @@ def frame_loop(camera):
             cam_stats["age_ms"] = round((now - cam.t_capture) * 1000, 1)
         cam_stats["seq"] = cam.seq
 
-        # the colour detection runs here only for the preview and the mask inset; the loop's own result wins when it runs
-        preview, mask = vision.detect(frame, "color")
+        # the colour detection runs here only when no loop is running (preview and mask inset): the loop's result wins
+        preview, mask = (None, None) if msg is not None else vision.detect(frame, "color")
         if msg is not None:
             ball = msg["ball"]
             u = msg["u"]
@@ -178,8 +187,9 @@ def frame_loop(camera):
         else:
             label = "preview (colour)  " + (f"r {preview[2]:.0f} px" if preview else "no ball")
             draw_overlay(frame, preview, None, label, (0, 200, 255))
-        inset = cv2.resize(mask, (88, 88))
-        frame[vision.H - 88:, vision.W - 88:] = cv2.cvtColor(inset, cv2.COLOR_GRAY2BGR)
+        if mask is not None:
+            inset = cv2.resize(mask, (88, 88))
+            frame[vision.H - 88:, vision.W - 88:] = cv2.cvtColor(inset, cv2.COLOR_GRAY2BGR)
         ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if ok:
             video.put(jpg.tobytes())
@@ -284,7 +294,7 @@ if __name__ == "__main__":
     p.add_argument("--camera", default="sonix")
     p.add_argument("--port", type=int, default=8000)
     a = p.parse_args()
-    threading.Thread(target=state.listen, daemon=True).start()
-    threading.Thread(target=frame_loop, args=(a.camera,), daemon=True).start()
+    threading.Thread(target=guarded, args=(state.listen,), daemon=True).start()
+    threading.Thread(target=guarded, args=(frame_loop, a.camera), daemon=True).start()
     print(f"dashboard on http://127.0.0.1:{a.port}/  (state from udp 127.0.0.1:{STATE_PORT})", flush=True)
     Server(("127.0.0.1", a.port), Handler).serve_forever()

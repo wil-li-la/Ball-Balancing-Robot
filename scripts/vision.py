@@ -30,7 +30,9 @@ BG_ALPHA_FG = 0.002                      # rate on foreground that is not the ba
 
 # IMAGE PROCESSING CONFIGURATION
 W, H = 352, 352             # size of the vision frame: at PX_PER_MM it covers the whole plate (inner radius 69 mm) around its center,
-center = (W // 2, H // 2)   # whatever the camera sees; the original build had a 320x240 frame, 128 x 96 mm
+center = (W // 2, H // 2)   # whatever the camera sees; the original build had a 320x240 frame, 128 x 96 mm.
+                            # NOTE the CSI path (hardware.start_camera) just asks libcamera for this size and is not calibrated: on the
+                            # original mount it no longer gives 2.5 px/mm. It needs the same rim calibration through the broker before use
 PLATE_R_MM = 66.0           # only this far from the center is the plate: a ball cannot be further out, and beyond it the frame shows
                             # the ring, hands, clothes and the room, which the colour mask would otherwise pick up
 plate_mask = np.zeros((H, W), np.uint8)

@@ -109,9 +109,11 @@ class Broker:
             self.cap.set(cv2.CAP_PROP_FPS, fps)
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)       # a spare buffer: with one, a late dequeue leaves the driver nowhere to put
                                                            # the next frame and uvcvideo hands over a frame with its rows shifted
-            self.v4l2("-c", "exposure_dynamic_framerate=0")   # in dim light the auto exposure would otherwise drop the frame rate
-            self.v4l2("-c", "auto_exposure=3,white_balance_automatic=1")
-            self.v4l2("-c", f"power_line_frequency={POWER_LINE}")   # the lamp behind the plate flickers at the mains frequency
+            # controls that not every UVC camera has, or names the same: tried one by one, a missing one is reported and skipped
+            self.v4l2("-c", "exposure_dynamic_framerate=0", strict=False)   # in dim light the auto exposure would otherwise drop the frame rate
+            self.v4l2("-c", "auto_exposure=3", strict=False)
+            self.v4l2("-c", "white_balance_automatic=1", strict=False)
+            self.v4l2("-c", f"power_line_frequency={POWER_LINE}", strict=False)   # the lamp behind the plate flickers at the mains frequency
         self.locked = None                                 # the manual exposure in use, None while auto
 
         slot = width * height * 3
@@ -172,12 +174,14 @@ class Broker:
     # EXPOSURE (the same search as the twin session's UvcCamera.lock_exposure: a UVC camera does not report the
     # exposure its auto mode chose, and switching to manual falls back to a stored value, so the manual exposure is
     # searched until the frame is as bright as the auto exposure made it)
-    def v4l2(self, *args):
+    def v4l2(self, *args, strict=True):
         if self.dev is None:
             return ""
         out = subprocess.run(["v4l2-ctl", "-d", self.dev, *args], capture_output=True, text=True)
         if out.returncode != 0 or out.stderr:
-            raise RuntimeError(f"v4l2-ctl {' '.join(args)}: {out.stderr.strip()}")
+            if strict:
+                raise RuntimeError(f"v4l2-ctl {' '.join(args)}: {out.stderr.strip()}")
+            print(f"camd {self.name}: v4l2-ctl {' '.join(args)} skipped: {out.stderr.strip() or out.returncode}", flush=True)
         return out.stdout
 
     def brightness(self, n=6):

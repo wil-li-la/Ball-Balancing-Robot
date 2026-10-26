@@ -103,9 +103,9 @@ class UvcCamera:
         self.name, self.size = name, (W, H)
         self.cam = camclient.Camera(name)
         self.seq, self.t_capture, self.last_raw = 0, 0.0, None
-        cal = calibrate.load()
-        if cal is None or cal["camera"] != name:
-            print(f"no calibration for {name} (run calibrate.py): using the whole frame")
+        cal = calibrate.load(name)
+        if cal is None:
+            print(f"no calibration for {name} (run calibrate.py): using the middle of the frame, which is only right for a camera centered under the plate")
             self.crop, self.map = None, None
         else:
             # the vision frame: the plate center at its center, vision.PX_PER_MM, axes turned to the mechanism's
@@ -124,12 +124,18 @@ class UvcCamera:
     def capture_array(self):
         self.seq, self.t_capture, frame = self.cam.read()
         self.last_raw = frame
-        if self.map is None:
+        if self.map is None:                 # the largest centered square of the frame, so x and y keep the same scale
+            h, w = frame.shape[:2]
+            side = min(h, w)
+            frame = frame[(h - side) // 2:(h - side) // 2 + side, (w - side) // 2:(w - side) // 2 + side]
             return cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA)   # BGR, like RGB888 from picamera2
         return cv2.warpAffine(frame, self.map, self.size, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
 
     def stop(self):
-        self.cam.ctl("unlock")             # the camera is left as it was found
+        try:
+            self.cam.ctl("unlock")         # the camera is left as it was found
+        except (OSError, RuntimeError) as e:  # the broker is gone: nothing to unlock
+            print(f"camd unlock skipped: {e}")
         self.cam.close()
 
 def start_uvc(name, W, H):
@@ -139,7 +145,8 @@ def start_uvc(name, W, H):
     return cam
 
 def shut_down(picam2):
-    picam2.stop()
+    # the servos first: whatever the camera does on the way out, the plate must not stay powered at its last angle
     for pin in SERVO_PINS:
         pi.set_servo_pulsewidth(pin, 0)
     pi.stop()
+    picam2.stop()
