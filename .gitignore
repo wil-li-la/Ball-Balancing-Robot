@@ -38,3 +38,4 @@ reinforcement_learning/sac_ball.zip
 scripts/calibration.json
 scripts/runs/
 logs/
+!scripts/runs/run_20261026_165651.jsonl
