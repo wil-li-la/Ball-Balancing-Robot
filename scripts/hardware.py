@@ -8,13 +8,14 @@ import time
 
 import calibrate
 import camclient
+import servo
 import vision
 
 cv2.setNumThreads(1)      # one thread per process: three processes each spawning four OpenCV threads starve the camera broker on the Pi 4
 
 # ACTUATION SETUP
 SERVO_PINS = [13, 18, 12]
-OFFSETS = [2, -8, -6]
+OFFSETS = [4, -8, -6]
 Q_HOME = 60                              # motor angle at the nominal pose
 Q_RANGE = 15                             # travel allowed around the nominal pose
 Q_MIN, Q_MAX = Q_HOME - Q_RANGE, Q_HOME + Q_RANGE
@@ -24,15 +25,23 @@ pi = pigpio.pi()
 if not pi.connected:
     raise RuntimeError("pigpio daemon not running. Start with: sudo pigpiod")
 
+# SERVO SENSE: in the original build a larger angle lowers that arm's side of the plate (kinematics.py, README section 5).
+# In this build the horns turn the other way: raising an angle raised the plate (and the user leveled it by lowering the
+# OFFSETS of the low sides), and with the controllers' angles sent as they were the plate tilted towards the ball instead
+# of away from it. Each servo is therefore driven mirrored about its own home pulse, so the home pose and the OFFSETS
+# stay as leveled and only the direction of every change flips. Set SERVO_DIR = 1 for a build like the original.
+SERVO_DIR = -1
+
 def angle_to_pulse(angle):
     # 0..180 deg -> 500..2500 us
     return 500 + (angle / 180.0) * 2000
 
-# SLEW LIMIT: the SG90 follows a step of a few degrees within a frame, so a command that jumps 15 deg between two
-# frames (a derivative term on a noisy measurement) is taken whole and shakes the whole robot. Every call may move each
-# servo by at most SLEW_DEG_PER_S x (time since the last call), so a jump is spread over a few frames and the plate
-# moves at a speed the ball can follow. 150 deg/s = 5 deg per frame at 30 fps: the whole travel in 6 frames
-SLEW_DEG_PER_S = 150.0
+def physical_angle(angle, i):
+    # the angle really sent to servo i for a commanded angle (IK angle + offset): the same, or its mirror about home
+    home = Q_HOME + OFFSETS[i]
+    return home + SERVO_DIR * (angle - home)
+
+# SLEW LIMIT: servo.slew, shared with the simulated robot
 _q_last = None                           # angles last sent, and when
 _t_last = None
 
@@ -42,10 +51,9 @@ def set_angle(angles, slew=True):
     now = time.monotonic()
     q = np.array(angles, dtype=float)
     if slew and _q_last is not None:
-        step = SLEW_DEG_PER_S * min(now - _t_last, 0.1)
-        q = _q_last + np.clip(q - _q_last, -step, step)
+        q = servo.slew(q, _q_last, now - _t_last)
     for i in range(3):
-        pi.set_servo_pulsewidth(SERVO_PINS[i], angle_to_pulse(q[i]))
+        pi.set_servo_pulsewidth(SERVO_PINS[i], angle_to_pulse(physical_angle(q[i], i)))
     _q_last, _t_last = q, now
     return q
 
