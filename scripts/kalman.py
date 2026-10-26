@@ -15,6 +15,13 @@ P0_VEL = 100.0**2                       # (px/s)^2, at reacquisition the velocit
 
 H = np.array([[1.0, 0.0]])              # only the error is actually measured, not its velocity
 
+# INNOVATION GATE: a measurement further than this from the prediction is not the ball moving (the detection jumped to
+# a hand or a reflection, the ball was touched) and is skipped, up to GATE_MAX frames in a row: after that it is taken,
+# the ball really is somewhere else. 40 px at 30 fps is 3 m/s, far above anything a balanced ball does
+GATE_PX = 40.0
+GATE_MAX = 5
+rejected = 0                            # measurements skipped in a row
+
 # KALMAN INITIALIZATION
 # x_hat[i] = [e, e_dot] along axis i. The two axes have the same model and the same noise,
 # and the covariance does not depend on the measurements, so a single P serves both
@@ -24,14 +31,15 @@ P = np.diag([P0_POS, P0_VEL])           # covariance of the estimate
 
 def reset(err):
     # reacquisition: the position is the measurement, the velocity is unknown
-    global x_hat, P
+    global x_hat, P, rejected
     x_hat = np.column_stack([err, np.zeros(2)])
     P = np.diag([P0_POS, P0_VEL])
+    rejected = 0
 
 
 def update(err, u, dt):
     # err is the measured error, u the slope commanded at the previous frame (even if it might be different from the actual slope due to clipping...)
-    global x_hat, P
+    global x_hat, P, rejected
     F = np.array([[1.0, dt],
                   [0.0, 1.0]])
     G = np.array([C*dt**2/2, C*dt])
@@ -44,9 +52,26 @@ def update(err, u, dt):
 
     # update
     y = err - x_pred[:, 0]
+    if np.linalg.norm(y) > GATE_PX and rejected < GATE_MAX:     # not the ball: keep the prediction
+        rejected += 1
+        x_hat, P = x_pred, P_pred
+        return x_hat[:, 0].copy(), x_hat[:, 1].copy()
+    rejected = 0
     S = (H @ P_pred @ H.T)[0, 0] + R_MEAS
     K = P_pred @ H.T[:, 0] / S
     x_hat = x_pred + np.outer(y, K)
     P = (np.eye(2) - np.outer(K, H[0])) @ P_pred
 
     return x_hat[:, 0].copy(), x_hat[:, 1].copy()     # filtered error, its velocity
+
+
+def predict(err, vel, u, horizon):
+    # where the ball will be `horizon` seconds after the frame: the loop acts on what the camera saw 60 to 100 ms ago
+    # (exposure, transfer, detection, servo pulse period, servo response), and a ping pong ball crosses 2 to 3 cm in
+    # that time. The controllers are given this instead of the measured error, so they command the plate for where the
+    # ball will be when the command takes effect.
+    # Only the velocity is extrapolated. Adding the acceleration the last slope u gives (C u) would put u itself into
+    # the derivative term one frame later with a factor KD C horizon, about -0.7 with the gains in use, so the loop
+    # fed on its own last command and diverged (run_20261026_165945). The velocity carries almost all of the
+    # prediction anyway: 300 px/s x 0.08 s = 24 px, against 3 px from the acceleration
+    return err + vel * horizon, vel
