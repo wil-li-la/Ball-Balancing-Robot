@@ -43,34 +43,39 @@ def start_camera(W, H):
     time.sleep(1.0)
     return picam2
 
-# D435 SETUP: its colour sensor is a plain UVC camera, read through V4L2 instead of libcamera
-D435_DEV = "/dev/v4l/by-id/usb-Intel_R__RealSense_TM__Depth_Camera_435_Intel_R__RealSense_TM__Depth_Camera_435-video-index0"
-D435_W, D435_H, D435_FPS = 640, 480, 30     # the closest 4:3 mode it has (no 20 fps mode)
+# USB CAMERAS: plain UVC cameras (the D435 colour sensor, a Sonix webcam), read through V4L2 instead of libcamera
+# name -> by-id device, capture mode; both run 640x480 YUYV at 30 fps, the closest 4:3 mode they have (no 20 fps mode)
+UVC_CAMERAS = {
+    "d435": "/dev/v4l/by-id/usb-Intel_R__RealSense_TM__Depth_Camera_435_Intel_R__RealSense_TM__Depth_Camera_435-video-index0",
+    "sonix": "/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB2.0_CAM1_USB2.0_CAM1-video-index0",
+}
+UVC_W, UVC_H, UVC_FPS = 640, 480, 30
 
 class UvcCamera:
     # same two calls the main loop makes on a Picamera2: capture_array() and stop()
-    def __init__(self, W, H):
-        self.size = (W, H)
-        self.cap = cv2.VideoCapture(D435_DEV, cv2.CAP_V4L2)
+    def __init__(self, name, W, H):
+        self.name, self.size = name, (W, H)
+        dev = UVC_CAMERAS[name]
+        self.cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
         if not self.cap.isOpened():
-            raise RuntimeError(f"cannot open {D435_DEV}")
+            raise RuntimeError(f"cannot open {dev}")
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, D435_W)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, D435_H)
-        self.cap.set(cv2.CAP_PROP_FPS, D435_FPS)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, UVC_W)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, UVC_H)
+        self.cap.set(cv2.CAP_PROP_FPS, UVC_FPS)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)    # always the newest frame, not a queued one
 
     def capture_array(self):
         ok, frame = self.cap.read()
         if not ok:
-            raise RuntimeError("D435 frame read failed")
+            raise RuntimeError(f"{self.name} frame read failed")
         return cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA)   # BGR, like RGB888 from picamera2
 
     def stop(self):
         self.cap.release()
 
-def start_d435(W, H):
-    cam = UvcCamera(W, H)
+def start_uvc(name, W, H):
+    cam = UvcCamera(name, W, H)
     for _ in range(30):           # let auto exposure settle
         cam.capture_array()
     return cam
