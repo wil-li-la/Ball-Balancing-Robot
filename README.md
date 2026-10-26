@@ -615,3 +615,62 @@ In simulation the same RL policy never loses the ball and holds it at the center
 This project is a reproduction of the ball balancing robot built by [Koshiro Robot Creator](https://www.youtube.com/watch?v=KnYSuQEBGHc). I decided to build my own version mainly to experiment and to learn, but also because I did not have the motors used in the original one: every part has therefore been modeled from scratch, taking inspiration from his design. The only exception is `camera_cover.stl`, which is a modified version of the one published in his [GitHub repository](https://github.com/KoshiroRobot/Ball-Balancing-Robot).
 
 The case that hosts the Raspberry Pi is the [Raspberry Pi 4 case](https://www.printables.com/model/566196-raspberry-pi-4-case) designed by Ryzor_Drone, modified so that it also works as the foot of the robot. That model is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), so `raspberry_bottom.stl` and `raspberry_top.stl` are shared under the same license. The other parts, `camera_cover.stl` apart, are modeled from scratch and are not covered by it.
+
+---
+
+## 16. This build: Raspberry Pi 4, Sonix USB camera, October 2026
+
+The fork differs from the original build in ways that cost a day to find. Everything below is what `scripts/` on branch
+`d435-camera` assumes; check it before trusting any run.
+
+### 16.1 What is different
+
+| | Original build (§2–§7) | This build |
+|---|---|---|
+| Camera | 5 MP CSI module, 320×240, image axes = robot axes | Sonix USB webcam (`USB2.0_CAM1`, 05a3:9230), 640×480 MJPG 30 fps, turned **−60°** about its axis |
+| Motor numbering | code's motors 1, 2, 3 on GPIO 13, 18, 12 at 180°, 300°, 60° | the servos on GPIO 13, 18, 12 are the ones **labelled 3, 1, 2** on the robot (same cyclic order, so the kinematics hold once the camera rotation is known) |
+| Servo sense | a larger angle lowers that arm | the same (checked one servo at a time, +8° lowers its side every time) |
+| Offsets | `[0, -5, -5]` | `[4, -8, -6]`, levelled by eye; `level.py` measured a further 2.9° in y that is still open |
+| Ball | pink | orange ping pong ball (`vision.HSV_LO/HI`), radius 38 px in the vision frame |
+| Servo power | Pi 5 V rail | Pi 5 V rail; two servos buzz under load, a separate supply is the first thing to try |
+
+### 16.2 Calibration (`scripts/calibration.json`, not in git)
+
+The plate center and the scale come from the inner edge of the printed ring (69.07 mm on `plate.stl`), the camera
+rotation from where the motors appear in the image. On 2026-10-26, with the camera clamped under the plate:
+
+```json
+{"camera": "sonix", "width": 640, "height": 480, "cx": 335.1, "cy": 226.3, "r_px": 250.6, "px_per_mm": 3.6279, "rot_deg": -60.0}
+```
+
+Redo it whenever the camera moves, with the rotation given explicitly: `python3 calibrate.py --rot -60`. If the
+motors move in the image, find the rotation again: it is the image angle (x right, y down) at which the mechanism's
++x axis, between the servos on GPIO 18 and 12, appears. The dashboard's full-camera view draws the x (red) and y
+(green) axes the calibration assumes.
+
+### 16.3 Running
+
+```bash
+cd ~/Ball-Balancing-Robot/scripts
+./start.sh camd                      # camera broker (MJPG; YUYV loses USB packets under load and shifts the rows)
+./start.sh dashboard                 # http://127.0.0.1:8000, from the Mac: ssh -N -L 8000:127.0.0.1:8000 xiangen@pi4.local
+./start.sh balancer --pid --kalman --latency 0.08 --gain 3 --camera sonix --detect color
+./start.sh stop
+```
+
+`--gain 3` triples the PID gains of §10 (the original gains keep the servos inside their dead band), `--kalman`
+feeds the PID the Kalman estimate, `--latency 0.08` extrapolates it 80 ms ahead by the velocity. The plate returns to
+level 0.3 s after the ball is lost. `signtest.py` checks the direction of the whole chain open loop, `follow.py`
+tilts the plate towards the center of wherever the ball is held.
+
+### 16.4 Result
+
+Run `scripts/runs/run_20261026_165651.jsonl` (recorded from the dashboard): the ball stayed on the plate for 72 s
+without a touch, rms error 15.5 mm, largest 47 mm, with a slow oscillation of 3 s in x and 4.4 s in y and about
+16 mm of amplitude, and servo steps of 0.4° per frame at the 90th percentile. The controller held a mean slope of
++0.05 in y the whole time: the plate at home is 2.9° off level.
+
+Things that broke it on the way, in case they come back: a frame that differs everywhere from the previous one is a
+USB-corrupted frame (the broker drops and counts them); a red shirt or a hand in view is detected as the ball unless
+the detection is confined to the plate disc (`vision.PLATE_R_MM`); a prediction that includes the acceleration from
+the last command feeds the derivative term with the command itself and diverges when KD is raised.

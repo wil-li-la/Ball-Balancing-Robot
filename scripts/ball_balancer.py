@@ -35,18 +35,21 @@ parser.add_argument("--stream", metavar="HOST[:PORT][,...]", default="127.0.0.1:
 parser.add_argument("--dry", action="store_true", help="leave the servos off")
 parser.add_argument("--latency", type=float, default=0.08, help="with --kalman: control the error predicted this many seconds ahead (0 disables)")
 parser.add_argument("--gain", type=float, default=1.0, help="multiplies the PID gains KP, KI, KD of control.py (this build's servos have a dead band the original gains barely cross)")
+parser.add_argument("--kd", type=float, default=1.0, help="extra multiplier on KD alone, on top of --gain (more damping)")
+parser.add_argument("--ki", type=float, default=1.0, help="extra multiplier on KI alone, on top of --gain")
 mode = parser.add_mutually_exclusive_group(required=True)
 mode.add_argument("--pid", action="store_true", help="PID control")
 mode.add_argument("--lqr", action="store_true", help="LQR control")
 mode.add_argument("--rl", action="store_true", help="RL control")
 args = parser.parse_args()
 gui_on = args.gui
-control.KP, control.KI, control.KD = control.KP * args.gain, control.KI * args.gain, control.KD * args.gain
+control.KP, control.KI, control.KD = control.KP * args.gain, control.KI * args.gain * args.ki, control.KD * args.gain * args.kd
 
 # SIGTERM (kill, start.sh stop) is treated like ctrl+c, so the servos are released on the way out
 signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))
 
 fps_smooth = float(hardware.TARGET_FPS)    # variable to keep track of the fps
+U_MAX = 0.2                 # largest slope commanded, within the servo travel for every direction
 LOST_HOME_S = 0.3           # without the ball for this long the plate goes back to level: it is being put back by hand, and
 t_lost = None               # a plate left tilted would throw it off again
 
@@ -123,6 +126,12 @@ try:
                 u = control.lqr(err_ctrl, dt, err_der)
             elif args.rl:
                 u = control.rl(err_ctrl)
+
+            # SATURATION: beyond U_MAX the inverse kinematics has no solution and the loop used to keep the previous command;
+            # the plate now goes to the largest slope in the wanted direction instead
+            n_u = np.linalg.norm(u)
+            if n_u > U_MAX:
+                u = u / n_u * U_MAX
 
             if args.log:    # the raw error, so that runs with --kalman are judged on what the camera sees
                 log.append([now, err[0], err[1], u[0], u[1]])

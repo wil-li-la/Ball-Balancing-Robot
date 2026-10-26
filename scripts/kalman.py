@@ -66,9 +66,12 @@ def update(err, u, dt):
 
 
 def predict(err, vel, u, horizon):
-    # where the ball will be `horizon` seconds after the frame, under the slope u that is acting on it: the loop acts on
-    # what the camera saw 60 to 100 ms ago (exposure, transfer, detection, servo pulse period, servo response), and a
-    # ping pong ball crosses 2 to 3 cm in that time. The controllers are given this instead of the measured error,
-    # so they command the plate for where the ball will be when the command takes effect
-    acc = C * np.asarray(u, dtype=float)
-    return err + vel * horizon + 0.5 * acc * horizon**2, vel + acc * horizon
+    # where the ball will be `horizon` seconds after the frame: the loop acts on what the camera saw 60 to 100 ms ago
+    # (exposure, transfer, detection, servo pulse period, servo response), and a ping pong ball crosses 2 to 3 cm in
+    # that time. The controllers are given this instead of the measured error, so they command the plate for where the
+    # ball will be when the command takes effect.
+    # Only the velocity is extrapolated. Adding the acceleration the last slope u gives (C u) would put u itself into
+    # the derivative term one frame later with a factor KD C horizon, about -0.7 with the gains in use, so the loop
+    # fed on its own last command and diverged (run_20261026_165945). The velocity carries almost all of the
+    # prediction anyway: 300 px/s x 0.08 s = 24 px, against 3 px from the acceleration
+    return err + vel * horizon, vel
